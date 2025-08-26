@@ -16,7 +16,7 @@ def fetch_temperature_data(base_url, iterations=5, delay=2):
 
     for i in range(iterations):
         try:
-            response = requests.get(f"{base_url}/get_temp")
+            response = requests.get(f"{base_url}/get_data")
             response.raise_for_status()  # raise error for bad responses
             json_data = response.json()
 
@@ -24,10 +24,11 @@ def fetch_temperature_data(base_url, iterations=5, delay=2):
             timestamp = json_data.get("timestamp")
 
             # Extract all fields that start with 'temp'
-            temps = {k: v for k, v in json_data.items() if k.startswith("temp")}
+            temps      = {k: v for k, v in json_data.items() if k.startswith("temp")}
+            humidities = {k: v for k, v in json_data.items() if k.startswith("hum")}
 
             if timestamp and temps:
-                entry = {"timestamp": timestamp, **temps}
+                entry = {"timestamp": timestamp, **temps, **humidities}
                 data_list.append(entry)
                 print(f"Fetched: {entry}")
             else:
@@ -69,6 +70,34 @@ def plot_temperature_data(data_list):
     plt.tight_layout()
     plt.show()
 
+def plot_humidity_data(data_list):
+    """
+    Plot multiple humidity series vs timestamp using matplotlib.
+    """
+    if not data_list:
+        print("No data to plot.")
+        return
+
+    timestamps = [datetime.fromisoformat(d["timestamp"]) for d in data_list]
+
+    # Find all temp keys
+    hum_keys = [k for k in data_list[0].keys() if k.startswith("hum")]
+
+    plt.figure(figsize=(10, 5))
+
+    for key in hum_keys:
+        humidities = [d.get(key) for d in data_list]
+        plt.plot(timestamps, humidities, marker="o", linestyle="-", label=key)
+
+    plt.title("Humidity Over Time")
+    plt.xlabel("Timestamp")
+    plt.ylabel("Humidity")
+    plt.xticks(rotation=45)
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+    plt.show()
+
 
 if __name__ == "__main__":
     # Example usage: change to your server URL
@@ -81,3 +110,4 @@ if __name__ == "__main__":
 
     # Plot the collected data
     plot_temperature_data(collected_data)
+    plot_humidity_data(collected_data)

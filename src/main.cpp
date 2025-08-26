@@ -8,6 +8,8 @@
 #include "WiFi.h"
 #include "ESPAsyncWebServer.h"
 
+#include "time.h"
+
 #define NUM_SENSORS 3
 
 #define DHTPIN1    4     // Digital pin connected to the DHT sensor 
@@ -18,6 +20,10 @@
 // Replace with your network credentials
 const char* ssid = "REPLACE_WITH_YOUR_SSID";
 const char* password = "REPLACE_WITH_YOUR_PASSWORD";
+
+const char* ntpServer = "pool.ntp.org";
+const long  gmtOffset_sec = 0;
+const int   daylightOffset_sec = 3600;
 
 // DHT_Unified dht1(DHTPIN1, DHTTYPE);
 // DHT_Unified dht2(DHTPIN2, DHTTYPE);
@@ -56,6 +62,11 @@ void setup() {
 
     // Print ESP32 Local IP Address
     Serial.println(WiFi.localIP());
+
+    // Init and get the time
+    Serial.println("configuring NTP...");
+    configTime(gmtOffset_sec, daylightOffset_sec, ntpServer);
+    printLocalTime();
 
     // setup routes
     server.on("/get_data", HTTP_GET, [](AsyncWebServerRequest *request){
@@ -115,7 +126,15 @@ void loop() {
 String processData() {
     StaticJsonDocument<200> doc;
 
-    doc["timestamp"] = String(millis()/1000)
+    struct tm timeinfo;
+    if(!getLocalTime(&timeinfo)){
+        Serial.println("Failed to obtain time");
+        doc["timestamp"] = String(millis()/1000)
+    } else {
+        char timeString[20];
+        strftime(timeString, sizeof(timeString), "%Y-%m-%dT%H:%M:%S", &timeinfo);
+        doc["timestamp"] = timeString
+    }
 
     for (int i = 0; i < NUM_SENSORS; i++) 
     {
