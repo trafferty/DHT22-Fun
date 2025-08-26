@@ -1,12 +1,8 @@
 #include <Arduino.h>
-#include <ArduinoJson.h>
 
 #include <Adafruit_Sensor.h>
 #include <DHT.h>
 #include <DHT_U.h>
-
-#include "WiFi.h"
-#include "ESPAsyncWebServer.h"
 
 #define NUM_SENSORS 3
 
@@ -14,10 +10,6 @@
 #define DHTPIN2    5     // Digital pin connected to the DHT sensor 
 #define DHTPIN3    14     // Digital pin connected to the DHT sensor 
 #define DHTTYPE    DHT22     // DHT 22 (AM2302)
-
-// Replace with your network credentials
-const char* ssid = "REPLACE_WITH_YOUR_SSID";
-const char* password = "REPLACE_WITH_YOUR_PASSWORD";
 
 // DHT_Unified dht1(DHTPIN1, DHTTYPE);
 // DHT_Unified dht2(DHTPIN2, DHTTYPE);
@@ -34,9 +26,6 @@ float temperature[NUM_SENSORS];
 
 uint32_t delayMS;
 
-// Create AsyncWebServer object on port 80
-AsyncWebServer server(80);
-
 void setup() {
     Serial.begin(9600);
 
@@ -46,24 +35,6 @@ void setup() {
         humidity[i] = 0;
         temperature[i] = 0;
     }
-
-    // Connect to Wi-Fi
-    WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED) {
-        delay(1000);
-        Serial.println("Connecting to WiFi..");
-    }
-
-    // Print ESP32 Local IP Address
-    Serial.println(WiFi.localIP());
-
-    // setup routes
-    server.on("/get_data", HTTP_GET, [](AsyncWebServerRequest *request){
-        request->send_P(200, "text/plain", processData().c_str());
-    });
-
-    // Start server
-    server.begin();
 
     delayMS = 2000;
 }
@@ -103,30 +74,4 @@ void loop() {
         Serial.print(humidity[i]);
     }
     Serial.println(F(""));
-}
-
-/*
-    Read humidity[NUM_SENSORS] and temperature[NUM_SENSORS] globals and put
-    together JSON string like this:
-
-    "{'timestamp': '2025-08-26T18:10:55.379061', 'temp1': -2.06, 'temp2': 15.67, 'temp3': 31.81}"
-
-*/
-String processData() {
-    StaticJsonDocument<200> doc;
-
-    doc["timestamp"] = String(millis()/1000)
-
-    for (int i = 0; i < NUM_SENSORS; i++) 
-    {
-        String key = "temp" + (i+1)
-        doc[key] = String(temperature[i]);
-        key = "humidity" + (i+1)
-        doc[key] = String(humidity[i]);
-    }
-    String jsonOutput;
-    serializeJson(doc, jsonOutput);
-    Serial.println(jsonOutput);
-
-    return jsonOutput;
 }
