@@ -1,14 +1,18 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <Time.h>
 
 #include <Adafruit_Sensor.h>
 #include <DHT.h>
 #include <DHT_U.h>
 
-#include "WiFi.h"
-#include "ESPAsyncWebServer.h"
+#include <WiFiUdp.h>
+#include <WiFiClient.h>
+#include <ArduinoOTA.h>
+#include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>
 
-#include "time.h"
+#include <sierra_wifi_defs.h>
 
 #define NUM_SENSORS 3
 
@@ -17,9 +21,17 @@
 #define DHTPIN3    14     // Digital pin connected to the DHT sensor 
 #define DHTTYPE    DHT22     // DHT 22 (AM2302)
 
-// Replace with your network credentials
-const char* ssid = "REPLACE_WITH_YOUR_SSID";
-const char* password = "REPLACE_WITH_YOUR_PASSWORD";
+/*
+**  Network variables...
+*/
+IPAddress ip(IP1, IP2, IP3, DHT22_TEMP_SERVER_IP_LAST_FIELD);  // make sure IP is *outside* of DHCP pool range
+IPAddress gateway(GW1, GW2, GW3, GW4);
+IPAddress subnet(SN1, SN2, SN3, SN4);
+IPAddress DNS(DNS1, DNS2, DNS3, DNS4);
+const char* ssid     = SSID;
+const char* password = WIFI_PW;
+int server_port = 80;
+String DNS_name = DHT22_TEMP_SERVER_HOSTNAME;
 
 const char* ntpServer = "pool.ntp.org";
 const long  gmtOffset_sec = 0;
@@ -40,8 +52,16 @@ float temperature[NUM_SENSORS];
 
 uint32_t delayMS;
 
-// Create AsyncWebServer object on port 80
-AsyncWebServer server(80);
+// Set web server port number
+ESP8266WebServer server(server_port);
+
+bool NTPTimeSet = false;
+char ntpServerNamePrimary[] = "pool.ntp.org";
+char ntpServerNameSecondary[] = "time.nist.gov";
+char *ntpServerName = ntpServerNamePrimary;
+
+WiFiUDP Udp;
+unsigned int UdpPort = 8888;  // local port to listen for UDP packets
 
 void setup() {
     Serial.begin(9600);
