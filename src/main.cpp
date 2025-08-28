@@ -5,8 +5,10 @@
 #include <DHT.h>
 #include <DHT_U.h>
 
-#include "WiFi.h"
-#include "ESPAsyncWebServer.h"
+#include <ESP8266WiFi.h>
+#include <ESP8266WebServer.h>
+
+#include <sierra_wifi_defs.h>
 
 #define NUM_SENSORS 3
 
@@ -15,9 +17,17 @@
 #define DHTPIN3    14     // Digital pin connected to the DHT sensor 
 #define DHTTYPE    DHT22     // DHT 22 (AM2302)
 
-// Replace with your network credentials
-const char* ssid = "REPLACE_WITH_YOUR_SSID";
-const char* password = "REPLACE_WITH_YOUR_PASSWORD";
+/*
+**  Network variables...
+*/
+IPAddress ip(IP1, IP2, IP3, DHT22_TEMP_SERVER_IP_LAST_FIELD);  // make sure IP is *outside* of DHCP pool range
+IPAddress gateway(GW1, GW2, GW3, GW4);
+IPAddress subnet(SN1, SN2, SN3, SN4);
+IPAddress DNS(DNS1, DNS2, DNS3, DNS4);
+const char* ssid     = SSID;
+const char* password = WIFI_PW;
+int server_port = 80;
+String DNS_name = DHT22_TEMP_SERVER_HOSTNAME;
 
 // DHT_Unified dht1(DHTPIN1, DHTTYPE);
 // DHT_Unified dht2(DHTPIN2, DHTTYPE);
@@ -34,8 +44,8 @@ float temperature[NUM_SENSORS];
 
 uint32_t delayMS;
 
-// Create AsyncWebServer object on port 80
-AsyncWebServer server(80);
+// Set web server port number
+ESP8266WebServer server(server_port);
 
 void setup() {
     Serial.begin(9600);
@@ -58,12 +68,12 @@ void setup() {
     Serial.println(WiFi.localIP());
 
     // setup routes
-    server.on("/get_data", HTTP_GET, [](AsyncWebServerRequest *request){
-        request->send_P(200, "text/plain", processData().c_str());
-    });
+    // server.on("/get_data", HTTP_GET, [](AsyncWebServerRequest *request){
+    //     request->send_P(200, "text/plain", processData().c_str());
+    // });
 
     // Start server
-    server.begin();
+    //server.begin();
 
     delayMS = 2000;
 }
@@ -113,17 +123,21 @@ void loop() {
 
 */
 String processData() {
-    StaticJsonDocument<200> doc;
 
-    doc["timestamp"] = String(millis()/1000)
+    // Allocate a temporary JsonDocument
+    JsonDocument doc;
+
+    // Create the "temp" array
+    JsonArray tempVals = doc["temp"].to<JsonArray>();
+    // Create the "humidity" array
+    JsonArray humidityVals = doc["humidity"].to<JsonArray>();
 
     for (int i = 0; i < NUM_SENSORS; i++) 
     {
-        String key = "temp" + (i+1)
-        doc[key] = String(temperature[i]);
-        key = "humidity" + (i+1)
-        doc[key] = String(humidity[i]);
+        tempVals.add(float(temperature[i]));
+        humidityVals.add(float(humidity[i]));
     }
+
     String jsonOutput;
     serializeJson(doc, jsonOutput);
     Serial.println(jsonOutput);
