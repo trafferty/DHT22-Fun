@@ -16,18 +16,17 @@ def fetch_temperature_data(base_url, iterations=5, delay=2):
 
     for i in range(iterations):
         try:
-            response = requests.get(f"{base_url}/get_temp")
+            response = requests.get(f"{base_url}/get_data")
             response.raise_for_status()  # raise error for bad responses
             json_data = response.json()
 
-            # Extract timestamp
+            # Extract timestamp and temp array
             timestamp = json_data.get("timestamp")
+            temps = json_data.get("temp")
+            humidities = json_data.get("humidity")
 
-            # Extract all fields that start with 'temp'
-            temps = {k: v for k, v in json_data.items() if k.startswith("temp")}
-
-            if timestamp and temps:
-                entry = {"timestamp": timestamp, **temps}
+            if timestamp is not None and isinstance(temps, list):
+                entry = {"timestamp": timestamp, "temp": temps,  "humidity": humidities}
                 data_list.append(entry)
                 print(f"Fetched: {entry}")
             else:
@@ -41,28 +40,46 @@ def fetch_temperature_data(base_url, iterations=5, delay=2):
     return data_list
 
 
-def plot_temperature_data(data_list):
+def plot_data(data_list):
     """
-    Plot multiple temperature series vs timestamp using matplotlib.
+    Plot temperature series vs timestamp using matplotlib.
+    Each element in the 'temp' array gets its own line.
     """
     if not data_list:
         print("No data to plot.")
         return
 
+    # Convert timestamps into datetime objects
     timestamps = [datetime.fromisoformat(d["timestamp"]) for d in data_list]
 
-    # Find all temp keys
-    temp_keys = [k for k in data_list[0].keys() if k.startswith("temp")]
+    # Find how many temperature values per entry
+    num_sensors = len(data_list[0]["temp"])
 
     plt.figure(figsize=(10, 5))
 
-    for key in temp_keys:
-        temps = [d.get(key) for d in data_list]
-        plt.plot(timestamps, temps, marker="o", linestyle="-", label=key)
+    # Plot each temperature index as a separate line
+    for i in range(num_sensors):
+        temps = [d["temp"][i] for d in data_list]
+        plt.plot(timestamps, temps, marker="o", linestyle="-", label=f"temp[{i}]")
 
-    plt.title("Temperature Over Time")
+    plt.title("Temperature Data Over Time")
     plt.xlabel("Timestamp")
     plt.ylabel("Temperature")
+    plt.xticks(rotation=45)
+    plt.grid(True)
+    plt.legend()
+    plt.tight_layout()
+
+    plt.figure(figsize=(10, 5))
+
+    # Plot each humidity index as a separate line
+    for i in range(num_sensors):
+        humidities = [d["humidity"][i] for d in data_list]
+        plt.plot(timestamps, humidities, marker="o", linestyle="-", label=f"humidity[{i}]")
+
+    plt.title("Humidity Data Over Time")
+    plt.xlabel("Timestamp")
+    plt.ylabel("Humidity")
     plt.xticks(rotation=45)
     plt.grid(True)
     plt.legend()
@@ -73,11 +90,11 @@ def plot_temperature_data(data_list):
 if __name__ == "__main__":
     # Example usage: change to your server URL
     server_url = "http://localhost:8088"
-    collected_data = fetch_temperature_data(server_url, iterations=10, delay=2)
+    collected_data = fetch_temperature_data(server_url, iterations=5, delay=1)
 
     print("\nFinal Collected Data:")
     for entry in collected_data:
         print(entry)
 
     # Plot the collected data
-    plot_temperature_data(collected_data)
+    plot_data(collected_data)

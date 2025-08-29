@@ -8,10 +8,12 @@
 #include <ESP8266WiFi.h>
 #include <ESP8266WebServer.h>
 
+#include <NTPClient.h>
+#include <WiFiUdp.h>
+
 #include <sierra_wifi_defs.h>
 
 #define version_str "v1.0 (adding network and webserver)"
-
 
 #define NUM_SENSORS 3
 
@@ -19,22 +21,6 @@
 #define DHTPIN2    5     // Digital pin connected to the DHT sensor 
 #define DHTPIN3    14     // Digital pin connected to the DHT sensor 
 #define DHTTYPE    DHT22     // DHT 22 (AM2302)
-
-/*
-**  Network variables...
-*/
-IPAddress ip(IP1, IP2, IP3, DHT22_TEMP_SERVER_IP_LAST_FIELD);  // make sure IP is *outside* of DHCP pool range
-IPAddress gateway(GW1, GW2, GW3, GW4);
-IPAddress subnet(SN1, SN2, SN3, SN4);
-IPAddress DNS(DNS1, DNS2, DNS3, DNS4);
-const char* ssid     = SSID;
-const char* password = WIFI_PW;
-int server_port = 80;
-String DNS_name = DHT22_TEMP_SERVER_HOSTNAME;
-
-// DHT_Unified dht1(DHTPIN1, DHTTYPE);
-// DHT_Unified dht2(DHTPIN2, DHTTYPE);
-// DHT_Unified dht3(DHTPIN3, DHTTYPE);
 
 DHT_Unified dht[] = {
   {DHTPIN1, DHT22},
@@ -45,16 +31,32 @@ DHT_Unified dht[] = {
 float humidity[NUM_SENSORS];
 float temperature[NUM_SENSORS];
 
+/*
+**  Network variables...
+*/
+IPAddress ip(IP1, IP2, IP3, DHT22_TEMP_SERVER_IP_LAST_FIELD);  // make sure IP is *outside* of DHCP pool range
+IPAddress gateway(GW1, GW2, GW3, GW4);
+IPAddress subnet(SN1, SN2, SN3, SN4);
+IPAddress DNS(DNS1, DNS2, DNS3, DNS4);
+const char* ssid     = SSID;
+const char* password = WIFI_PW;
+int server_port = 8088;
+String DNS_name = DHT22_TEMP_SERVER_HOSTNAME;
+
 uint32_t delayMS;
 
 // forward declarations
 void wifi_init();
-String processData();
+String buildJSONData();
 void handleRoot();
 void handleGetData();
 
-// Set web server port number
+// Create web server and set port number
 ESP8266WebServer server(server_port);
+
+WiFiUDP ntpUDP;
+// By default 'pool.ntp.org' is used with 60 seconds update interval
+NTPClient timeClient(ntpUDP);
 
 void setup() {
     Serial.begin(115200);
@@ -70,6 +72,8 @@ void setup() {
 
     wifi_init();
 
+    timeClient.begin();
+
     // setup routes
     server.on("/", handleRoot);
     server.on("/get_data", handleGetData);
@@ -80,6 +84,7 @@ void setup() {
     delayMS = 2000;
 }
 void loop() {
+    timeClient.update();
     // Delay between measurements.
     delay(delayMS);
 
@@ -99,36 +104,23 @@ void loop() {
             humidity[i] = event.relative_humidity;
     }
 
-    Serial.print(F("Temp (F):     "));
-    for (int i = 0; i < NUM_SENSORS; i++) 
-    {
-        Serial.print(F(" "));
-        Serial.print(temperature[i]);
-    }
-    Serial.println(F(""));
-
-    Serial.print(F("Humidity (%): "));
-    for (int i = 0; i < NUM_SENSORS; i++) 
-    {
-        Serial.print(F(" "));
-        Serial.print(humidity[i]);
-    }
-    Serial.println(F(""));
+    String data = buildJSONData();
+    Serial.println(data);
 }
 
 /*
     Read humidity[NUM_SENSORS] and temperature[NUM_SENSORS] globals and put
     together JSON string like this:
 
-    "{'timestamp': '2025-08-26T18:10:55.379061', 'temp1': -2.06, 'temp2': 15.67, 'temp3': 31.81}"
+    "{'timestamp': '2025-08-26T18:10:55.379061', 'temp': [-2.06, 15.67, 31.81], 'humidity': [50.0, 49.1, 45.7]}"
 
 */
-String processData() {
+String buildJSONData() {
 
     // Allocate a temporary JsonDocument
     JsonDocument doc;
 
-    doc["timestamp"] = String(millis());
+    doc["timestamp"] = timeClient.getFormattedTime();
 
     // Create the "temp" array
     JsonArray tempVals = doc["temp"].to<JsonArray>();
@@ -141,11 +133,11 @@ String processData() {
         humidityVals.add(float(humidity[i]));
     }
 
-    String jsonOutput;
-    serializeJson(doc, jsonOutput);
-    Serial.println(jsonOutput);
+    String jsonStr;
+    serializeJson(doc, jsonStr);
+    //Serial.println(jsonStr);
 
-    return jsonOutput;
+    return jsonStr;
 }
 
 void wifi_init()
@@ -178,5 +170,5 @@ void handleRoot() {
 }
 
 void handleGetData() {
-  server.send(200, "text/plain", processData().c_str());
+  server.send(200, "text/plain", buildJSONData().c_str());
 }
