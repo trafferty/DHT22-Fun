@@ -10,6 +10,9 @@
 
 #include <sierra_wifi_defs.h>
 
+#define version_str "v1.0 (adding network and webserver)"
+
+
 #define NUM_SENSORS 3
 
 #define DHTPIN1    4     // Digital pin connected to the DHT sensor 
@@ -44,11 +47,19 @@ float temperature[NUM_SENSORS];
 
 uint32_t delayMS;
 
+// forward declarations
+void wifi_init();
+String processData();
+void handleRoot();
+void handleGetData();
+
 // Set web server port number
 ESP8266WebServer server(server_port);
 
 void setup() {
-    Serial.begin(9600);
+    Serial.begin(115200);
+    Serial.print("\nDHT22 TempServer Version: ");
+    Serial.println(version_str);
 
     for (int i = 0; i < NUM_SENSORS; i++) 
     {
@@ -57,27 +68,17 @@ void setup() {
         temperature[i] = 0;
     }
 
-    // Connect to Wi-Fi
-    WiFi.begin(ssid, password);
-    while (WiFi.status() != WL_CONNECTED) {
-        delay(1000);
-        Serial.println("Connecting to WiFi..");
-    }
-
-    // Print ESP32 Local IP Address
-    Serial.println(WiFi.localIP());
+    wifi_init();
 
     // setup routes
-    // server.on("/get_data", HTTP_GET, [](AsyncWebServerRequest *request){
-    //     request->send_P(200, "text/plain", processData().c_str());
-    // });
+    server.on("/", handleRoot);
+    server.on("/get_data", handleGetData);
 
     // Start server
-    //server.begin();
+    server.begin();
 
     delayMS = 2000;
 }
-
 void loop() {
     // Delay between measurements.
     delay(delayMS);
@@ -127,6 +128,8 @@ String processData() {
     // Allocate a temporary JsonDocument
     JsonDocument doc;
 
+    doc["timestamp"] = String(millis());
+
     // Create the "temp" array
     JsonArray tempVals = doc["temp"].to<JsonArray>();
     // Create the "humidity" array
@@ -143,4 +146,37 @@ String processData() {
     Serial.println(jsonOutput);
 
     return jsonOutput;
+}
+
+void wifi_init()
+{
+    Serial.print("Setting up network with static IP.");
+    WiFi.config(ip, gateway, subnet, DNS);
+    delay(100);
+    WiFi.mode(WIFI_STA);
+    WiFi.begin(ssid, password);
+    // Connect to Wi-Fi network with SSID and password
+    Serial.printf("Connecting to %s", ssid);
+    while (WiFi.status() != WL_CONNECTED)
+    {
+        Serial.print(".");
+        delay(200);
+    }
+    Serial.println();
+    while (WiFi.waitForConnectResult() != WL_CONNECTED)
+    {
+        Serial.println("Fail connecting");
+        delay(5000);
+        ESP.restart();
+    }
+    Serial.print("WiFi connected. IP address: ");
+    Serial.println(WiFi.localIP());
+}
+
+void handleRoot() {
+  server.send(200, "text/plain", "Hello world!");   // Send HTTP status 200 (Ok) and send some text to the browser/client
+}
+
+void handleGetData() {
+  server.send(200, "text/plain", processData().c_str());
 }
