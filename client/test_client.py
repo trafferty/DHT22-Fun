@@ -17,7 +17,7 @@ def fetch_temperature_data(base_url, iterations=5, delay=2):
     print(f"Connecting to {base_url} to collect data.  {iterations} iters")
     for i in range(iterations):
         try:
-            response = requests.get(f"{base_url}/get_data")
+            response = requests.get(f"{base_url}/get_data", timeout=5)            
             response.raise_for_status()  # raise error for bad responses
             json_data = response.json()
 
@@ -33,6 +33,8 @@ def fetch_temperature_data(base_url, iterations=5, delay=2):
             else:
                 print("Invalid response format:", json_data)
 
+        except requests.exceptions.Timeout:
+            print("The request timed out.")
         except requests.RequestException as e:
             print("Request failed:", e)
 
@@ -92,7 +94,7 @@ def plot_data(data_list):
 if __name__ == "__main__":
     # Example usage: change to your server URL
     server_url = "http://192.168.129.205:8088"
-    collected_data = fetch_temperature_data(server_url, iterations=3, delay=60)
+    collected_data = fetch_temperature_data(server_url, iterations=60, delay=60)
 
     print("\nFinal Collected Data:")
     for entry in collected_data:

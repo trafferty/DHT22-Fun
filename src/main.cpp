@@ -47,6 +47,7 @@ uint32_t delayMS;
 
 // forward declarations
 void wifi_init();
+void updateSensorData();
 String buildJSONData();
 void handleRoot();
 void handleGetData();
@@ -96,12 +97,21 @@ void setup() {
 }
 void loop() {
 
+#if 0
+    // Delay between measurements.
+    delay(delayMS);
+
+    updateSensorData();
+
+    String data = buildJSONData();
+    Serial.println(data);
+#endif
+
     // Listen for HTTP requests from clients
     server.handleClient(); 
+}
 
-    // Delay between measurements.
-    //delay(delayMS);
-
+void updateSensorData() {
     for (int i = 0; i < NUM_SENSORS; i++) 
     {
         sensors_event_t event;
@@ -117,9 +127,6 @@ void loop() {
         else
             humidity[i] = event.relative_humidity;
     }
-
-    // String data = buildJSONData();
-    // Serial.println(data);
 }
 
 /*
@@ -180,10 +187,19 @@ void wifi_init()
 
 void handleRoot() {
   server.send(404, "text/plain", "404: Not found");   // Send HTTP status 200 (Ok) and send some text to the browser/client
+
+  Serial.print("getFreeHeap: ");
+  Serial.println(ESP.getFreeHeap());
+  Serial.print("getHeapFragmentation: ");
+  Serial.println(ESP.getHeapFragmentation());
+  Serial.print("getMaxFreeBlockSize: ");
+  Serial.println(ESP.getMaxFreeBlockSize());
+ 
 }
 
 void handleGetData() {
-    Serial.println(" - Handling request for data...");
+    //Serial.println(" - Handling request for data...");
+    updateSensorData();
     String data = buildJSONData();
     server.send(200, "text/plain", data.c_str());
 }
