@@ -16,7 +16,8 @@ def get_temp():
 
     # Current UTC timestamp in ISO 8601 format
     #timestamp = datetime.now(datetime.timezone.utc) #+ "Z"
-    timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    #timestamp = datetime.now().strftime("%Y-%m-%dT%H:%M:%S")
+    timestamp = datetime.now().strftime("%H:%M:%S")
 
     return jsonify({
         "temp": [temp1, temp2, temp3],

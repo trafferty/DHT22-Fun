@@ -14,6 +14,7 @@ def fetch_temperature_data(base_url, iterations=5, delay=2):
     """
     data_list = []
 
+    print(f"Connecting to {base_url} to collect data.  {iterations} iters")
     for i in range(iterations):
         try:
             response = requests.get(f"{base_url}/get_data")
@@ -50,7 +51,8 @@ def plot_data(data_list):
         return
 
     # Convert timestamps into datetime objects
-    timestamps = [datetime.fromisoformat(d["timestamp"]) for d in data_list]
+    #timestamps = [datetime.fromisoformat(d["timestamp"]) for d in data_list]
+    timestamps = [datetime.strptime(d["timestamp"], "%H:%M:%S") for d in data_list]
 
     # Find how many temperature values per entry
     num_sensors = len(data_list[0]["temp"])
@@ -89,8 +91,8 @@ def plot_data(data_list):
 
 if __name__ == "__main__":
     # Example usage: change to your server URL
-    server_url = "http://localhost:8088"
-    collected_data = fetch_temperature_data(server_url, iterations=5, delay=1)
+    server_url = "http://192.168.129.205:8088"
+    collected_data = fetch_temperature_data(server_url, iterations=3, delay=60)
 
     print("\nFinal Collected Data:")
     for entry in collected_data:

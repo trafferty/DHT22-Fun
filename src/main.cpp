@@ -60,6 +60,8 @@ NTPClient timeClient(ntpUDP);
 
 void setup() {
     Serial.begin(115200);
+    delay(100);
+
     Serial.print("\nDHT22 TempServer Version: ");
     Serial.println(version_str);
 
@@ -73,6 +75,13 @@ void setup() {
     wifi_init();
 
     timeClient.begin();
+    int GMTOffset = -5;
+    timeClient.setTimeOffset(GMTOffset * 3600);
+
+    Serial.println("Starting up time client");
+    delay(1000);
+    timeClient.update();
+    Serial.println(timeClient.getFormattedTime());
 
     // setup routes
     server.on("/", handleRoot);
@@ -80,13 +89,18 @@ void setup() {
 
     // Start server
     server.begin();
+    Serial.print("http server started at: ");
+    Serial.println(server.uri());
 
     delayMS = 2000;
 }
 void loop() {
-    timeClient.update();
+
+    // Listen for HTTP requests from clients
+    server.handleClient(); 
+
     // Delay between measurements.
-    delay(delayMS);
+    //delay(delayMS);
 
     for (int i = 0; i < NUM_SENSORS; i++) 
     {
@@ -104,8 +118,8 @@ void loop() {
             humidity[i] = event.relative_humidity;
     }
 
-    String data = buildJSONData();
-    Serial.println(data);
+    // String data = buildJSONData();
+    // Serial.println(data);
 }
 
 /*
@@ -116,7 +130,6 @@ void loop() {
 
 */
 String buildJSONData() {
-
     // Allocate a temporary JsonDocument
     JsonDocument doc;
 
@@ -166,9 +179,11 @@ void wifi_init()
 }
 
 void handleRoot() {
-  server.send(200, "text/plain", "Hello world!");   // Send HTTP status 200 (Ok) and send some text to the browser/client
+  server.send(404, "text/plain", "404: Not found");   // Send HTTP status 200 (Ok) and send some text to the browser/client
 }
 
 void handleGetData() {
-  server.send(200, "text/plain", buildJSONData().c_str());
+    Serial.println(" - Handling request for data...");
+    String data = buildJSONData();
+    server.send(200, "text/plain", data.c_str());
 }
