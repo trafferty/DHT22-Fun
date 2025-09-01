@@ -2,6 +2,7 @@ import requests
 import time
 import matplotlib.pyplot as plt
 from datetime import datetime
+import argparse
 
 def fetch_temperature_data(base_url, iterations=5, delay=2):
     """
@@ -92,9 +93,14 @@ def plot_data(data_list):
 
 
 if __name__ == "__main__":
-    # Example usage: change to your server URL
-    server_url = "http://192.168.129.205:8088"
-    collected_data = fetch_temperature_data(server_url, iterations=60, delay=60)
+    parser = argparse.ArgumentParser(description='Collect temp/humidity data from ESP temp server, and plot collected data')
+    parser.add_argument('ip_port', type=str, default="192.168.129.202:8088", help='IP Address and port of the temp server (192.168.129.202:8088)')
+    parser.add_argument('--iters', type=int, default=5, help='Number of iterations of data to collect')
+    parser.add_argument('--delay', type=int, default=5, help='Delay (sec) between iteration')
+    args = parser.parse_args()
+    
+    server_url = f"http://{args.ip_port}"
+    collected_data = fetch_temperature_data(server_url, iterations=args.iters, delay=args.delay)
 
     print("\nFinal Collected Data:")
     for entry in collected_data:

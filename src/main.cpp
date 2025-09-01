@@ -11,7 +11,7 @@
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 
-#include <sierra_wifi_defs.h>
+#include "sierra_wifi_defs.h"
 
 #define version_str "v1.0 (adding network and webserver)"
 
@@ -97,7 +97,7 @@ void setup() {
 }
 void loop() {
 
-#if 0
+#if 1
     // Delay between measurements.
     delay(delayMS);
 
@@ -198,8 +198,7 @@ void handleRoot() {
 }
 
 void handleGetData() {
-    //Serial.println(" - Handling request for data...");
-    updateSensorData();
+    Serial.println(" - Handling request for data...");
     String data = buildJSONData();
     server.send(200, "text/plain", data.c_str());
 }
