@@ -6,7 +6,7 @@ from datetime import datetime
 import argparse
 import json
 
-def fetch_temperature_data(base_url, iterations=5, delay=2):
+def fetch_temperature_data(base_url, iterations=5, delay=1.0):
     """
     Fetch temperature data from the server and store it in a list.
 
@@ -33,7 +33,7 @@ def fetch_temperature_data(base_url, iterations=5, delay=2):
             if timestamp is not None and isinstance(temps, list):
                 entry = {"timestamp": timestamp, "temp": temps,  "humidity": humidities}
                 data_list.append(entry)
-                print(f"Fetched: {entry}")
+                print(f"Fetched ({i+1} of {iterations}): {entry}")
             else:
                 print("Invalid response format:", json_data)
 
@@ -62,52 +62,44 @@ def plot_data(data_list):
     # Find how many temperature values per entry
     num_sensors = len(data_list[0]["temp"])
 
-    plt.figure(figsize=(10, 5))
+    fname_root = f"{data_list[0]['timestamp'].replace(' ', '_').replace(':', '').replace('-', '')}"
+
+    fig, axes = plt.subplots(nrows=2, ncols=1, figsize=(15, 10)) # Adjust figsize as needed
+    fig.tight_layout(pad=5.0, w_pad=5, h_pad=10)
 
     # Plot each temperature index as a separate line
     for i in range(num_sensors):
         temps = [d["temp"][i] for d in data_list]
-        #plt.plot(timestamps, temps, marker="o", linestyle="-", label=f"temp[{i}]")
-        plt.plot(timestamps, temps, linestyle="-", label=f"temp[{i}]")
+        #axes[0].plot(timestamps, temps, marker="o", linestyle="-", label=f"temp[{i}]")
+        axes[0].plot(timestamps, temps, linestyle="-", label=f"temp[{i}]")
 
-    plt.title(f"Temperature Data: {data_list[0]['timestamp']} - {data_list[-1]['timestamp']}")
-    plt.xlabel("Timestamp")
-    plt.ylabel("Temperature")
-    #plt.xticks(rotation=45)
-    plt.grid(True)
-    plt.legend()
-    plt.tight_layout()
-    ax = plt.gca()
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%a %H:%M'))
-    ax.xaxis.set_major_locator(mdates.MinuteLocator(interval=60)) # Ticks every 30 minutes
-    plt.gcf().autofmt_xdate() # Automatically rotates and aligns x-axis labels
-
-    plot_file = f"temp_plots_{data_list[0]['timestamp'].replace(' ', '_').replace(':', '').replace('-', '')}.png"
-    plt.savefig(plot_file) 
-
-    # --- Now do the humidity data
-    plt.figure(figsize=(10, 5))
+    axes[0].set_title(f"Temperature Data: {data_list[0]['timestamp']} - {data_list[-1]['timestamp']}")
+    axes[0].set_xlabel("Timestamp")
+    axes[0].set_ylabel("Temperature")
+    axes[0].grid(True)
+    axes[0].legend()
+    axes[0].tick_params(axis='x', rotation=45)
+    axes[0].xaxis.set_major_formatter(mdates.DateFormatter('%a %H:%M'))
+    axes[0].xaxis.set_major_locator(mdates.MinuteLocator(interval=60)) # Ticks every 60 minutes
+    #plt.gcf().autofmt_xdate() # Automatically rotates and aligns x-axis labels
 
     # Plot each humidity index as a separate line
     for i in range(num_sensors):
         humidities = [d["humidity"][i] for d in data_list]
-        #plt.plot(timestamps, humidities, marker="o", linestyle="-", label=f"humidity[{i}]")
-        plt.plot(timestamps, humidities, linestyle="-", label=f"humidity[{i}]")
+        #axes[1].plot(timestamps, humidities, marker="o", linestyle="-", label=f"humidity[{i}]")
+        axes[1].plot(timestamps, humidities, linestyle="-", label=f"humidity[{i}]")
 
-    plt.title(f"Humidity Data: {data_list[0]['timestamp']} - {data_list[-1]['timestamp']}")
-    plt.xlabel("Timestamp")
-    plt.ylabel("Humidity")
-    #plt.xticks(rotation=45)
-    plt.grid(True)
-    plt.legend()
-    plt.tight_layout()
-    ax = plt.gca()
-    ax.xaxis.set_major_formatter(mdates.DateFormatter('%a %H:%M'))
-    ax.xaxis.set_major_locator(mdates.MinuteLocator(interval=60)) # Ticks every 30 minutes
-    plt.gcf().autofmt_xdate() # Automatically rotates and aligns x-axis labels
+    axes[1].set_title(f"Humidity Data: {data_list[0]['timestamp']} - {data_list[-1]['timestamp']}")
+    axes[1].set_xlabel("Timestamp")
+    axes[1].set_ylabel("Humidity")
+    axes[1].grid(True)
+    axes[1].legend()
+    axes[1].tick_params(axis='x', rotation=45)
+    axes[1].xaxis.set_major_formatter(mdates.DateFormatter('%a %H:%M'))
+    axes[1].xaxis.set_major_locator(mdates.MinuteLocator(interval=60)) # Ticks every 60 minutes
+    #plt.gcf().autofmt_xdate() # Automatically rotates and aligns x-axis labels
     
-    plot_file = f"humidity_plots_{data_list[0]['timestamp'].replace(' ', '_').replace(':', '').replace('-', '')}.png"
-    plt.savefig(plot_file) 
+    plt.savefig(f"{fname_root}_data_plots.png") 
 
     plt.show()
 
@@ -137,7 +129,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Collect temp/humidity data from ESP temp server, and plot collected data')
     parser.add_argument('--ip_port', type=str, default="192.168.129.202:8088", help='IP Address and port of the temp server (192.168.129.202:8088)')
     parser.add_argument('--iters', type=int, default=5, help='Number of iterations of data to collect')
-    parser.add_argument('--delay', type=int, default=5, help='Delay (sec) between iteration')
+    parser.add_argument('--delay', type=float, default=5.0, help='Delay (sec) between iteration')
     parser.add_argument('--plot_data_file', type=str, default='', help='Instead of running normally, simply plot the previously saved data JSON file')
     args = parser.parse_args()
     
