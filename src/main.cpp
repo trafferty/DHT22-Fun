@@ -13,14 +13,14 @@
 
 #include "sierra_wifi_defs.h"
 
-#define version_str "v1.0 (adding network and webserver)"
+#define version_str "v1.1 (adding network and webserver)"
 
 #define NUM_SENSORS 3
 
-#define DHTPIN1    4     // Digital pin connected to the DHT sensor 
-#define DHTPIN2    5     // Digital pin connected to the DHT sensor 
-#define DHTPIN3    14     // Digital pin connected to the DHT sensor 
-#define DHTTYPE    DHT22     // DHT 22 (AM2302)
+#define DHTPIN1    4      // DHT sensor 1.  ESP12: D2
+#define DHTPIN2    5      // DHT sensor 2.  ESP12: D1
+#define DHTPIN3    14     // DHT sensor 3.  ESP12: D5
+#define DHTTYPE    DHT22  // DHT 22 (AM2302)
 
 DHT_Unified dht[] = {
   {DHTPIN1, DHT22},
@@ -44,9 +44,10 @@ int server_port = 8088;
 String DNS_name = DHT22_TEMP_SERVER_HOSTNAME;
 
 uint32_t delayMS;
+bool online = false;
 
 // forward declarations
-void wifi_init();
+bool wifi_init(uint32_t waitTime_ms);
 void updateSensorData();
 String buildJSONData();
 void handleRoot();
@@ -61,7 +62,7 @@ NTPClient timeClient(ntpUDP);
 
 void setup() {
     Serial.begin(115200);
-    delay(100);
+    delay(500);
 
     Serial.print("\nDHT22 TempServer Version: ");
     Serial.println(version_str);
@@ -73,25 +74,31 @@ void setup() {
         temperature[i] = 0;
     }
 
-    wifi_init();
+    online = wifi_init(5000);
+    if (!online)
+    {
+        Serial.println("Could not connect to WiFi.  Running in offline mode.");
+    }
+    else
+    {
+        timeClient.begin();
+        int GMTOffset = -5;
+        timeClient.setTimeOffset(GMTOffset * 3600);
 
-    timeClient.begin();
-    int GMTOffset = -5;
-    timeClient.setTimeOffset(GMTOffset * 3600);
+        Serial.println("Starting up time client");
+        delay(1000);
+        timeClient.update();
+        Serial.println(timeClient.getFormattedTime());
 
-    Serial.println("Starting up time client");
-    delay(1000);
-    timeClient.update();
-    Serial.println(timeClient.getFormattedTime());
+        // setup routes
+        server.on("/", handleRoot);
+        server.on("/get_data", handleGetData);
 
-    // setup routes
-    server.on("/", handleRoot);
-    server.on("/get_data", handleGetData);
-
-    // Start server
-    server.begin();
-    Serial.print("http server started at: ");
-    Serial.println(server.uri());
+        // Start server
+        server.begin();
+        Serial.print("http server started at: ");
+        Serial.println(server.uri());
+    }
 
     delayMS = 2000;
 }
@@ -107,8 +114,11 @@ void loop() {
     Serial.println(data);
 #endif
 
-    // Listen for HTTP requests from clients
-    server.handleClient(); 
+    if (online)
+    {
+        // Listen for HTTP requests from clients
+        server.handleClient(); 
+    }
 }
 
 void updateSensorData() {
@@ -160,7 +170,7 @@ String buildJSONData() {
     return jsonStr;
 }
 
-void wifi_init()
+bool wifi_init(uint32_t waitTime_ms)
 {
     Serial.print("Setting up network with static IP.");
     WiFi.config(ip, gateway, subnet, DNS);
@@ -168,21 +178,25 @@ void wifi_init()
     WiFi.mode(WIFI_STA);
     WiFi.begin(ssid, password);
     // Connect to Wi-Fi network with SSID and password
-    Serial.printf("Connecting to %s", ssid);
+    Serial.printf("Connecting to %s\n", ssid);
+    uint32_t start_ts = millis();
     while (WiFi.status() != WL_CONNECTED)
     {
         Serial.print(".");
         delay(200);
+        if (millis() - start_ts > waitTime_ms)
+            return false;
     }
-    Serial.println();
+    Serial.println("WiFi connected.  Setting up address.");
     while (WiFi.waitForConnectResult() != WL_CONNECTED)
     {
         Serial.println("Fail connecting");
-        delay(5000);
+        delay(waitTime_ms);
         ESP.restart();
     }
     Serial.print("WiFi connected. IP address: ");
     Serial.println(WiFi.localIP());
+    return true;
 }
 
 void handleRoot() {
