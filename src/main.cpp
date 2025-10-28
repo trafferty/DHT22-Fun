@@ -13,7 +13,7 @@
 
 #include "sierra_wifi_defs.h"
 
-#define version_str "v1.1 (adding network and webserver)"
+#define version_str "v2.0: Deploy version"
 
 #define NUM_SENSORS 3
 
@@ -27,6 +27,9 @@ DHT_Unified dht[] = {
   {DHTPIN2, DHT22},
   {DHTPIN3, DHT22},
 };
+
+#define OUTSIDE_S1 0      // Index of outside sensor 1
+#define OUTSIDE_S2 1      // Index of outside sensor 2
 
 float humidity[NUM_SENSORS];
 float temperature[NUM_SENSORS];
@@ -43,8 +46,9 @@ const char* password = WIFI_PW;
 int server_port = 8088;
 String DNS_name = DHT22_TEMP_SERVER_HOSTNAME;
 
-uint32_t delayMS;
 bool online = false;
+const long interval = 5000; // 2 seconds
+unsigned long previousMillis = interval;
 
 // forward declarations
 bool wifi_init(uint32_t waitTime_ms);
@@ -52,6 +56,9 @@ void updateSensorData();
 String buildJSONData();
 void handleRoot();
 void handleGetData();
+void handleDisplayData();
+String CreateTempDisplayHTML();
+String CreateRootHTML();
 
 // Create web server and set port number
 ESP8266WebServer server(server_port);
@@ -93,26 +100,27 @@ void setup() {
         // setup routes
         server.on("/", handleRoot);
         server.on("/get_data", handleGetData);
+        server.on("/display_data", handleDisplayData);
 
         // Start server
         server.begin();
         Serial.print("http server started at: ");
         Serial.println(server.uri());
     }
-
-    delayMS = 2000;
 }
+
 void loop() {
+    unsigned long currentMillis = millis();
 
-#if 1
-    // Delay between measurements.
-    delay(delayMS);
+    if (currentMillis - previousMillis >= interval) 
+    {
+        previousMillis = currentMillis; 
 
-    updateSensorData();
+        updateSensorData();
 
-    String data = buildJSONData();
-    Serial.println(data);
-#endif
+        String data = buildJSONData();
+        Serial.println(data);
+    }
 
     if (online)
     {
@@ -195,24 +203,77 @@ bool wifi_init(uint32_t waitTime_ms)
         ESP.restart();
     }
     Serial.print("WiFi connected. IP address: ");
-    Serial.println(WiFi.localIP());
+    Serial.println(WiFi.localIP().toString());
     return true;
 }
 
 void handleRoot() {
-  server.send(404, "text/plain", "404: Not found");   // Send HTTP status 200 (Ok) and send some text to the browser/client
+    Serial.println(" - Handling request for get_data...");
+    String data = CreateRootHTML();
+    server.send(200, "text/plain", data.c_str());
 
-  Serial.print("getFreeHeap: ");
-  Serial.println(ESP.getFreeHeap());
-  Serial.print("getHeapFragmentation: ");
-  Serial.println(ESP.getHeapFragmentation());
-  Serial.print("getMaxFreeBlockSize: ");
-  Serial.println(ESP.getMaxFreeBlockSize());
- 
+    Serial.print("getFreeHeap: ");
+    Serial.println(ESP.getFreeHeap());
+    Serial.print("getHeapFragmentation: ");
+    Serial.println(ESP.getHeapFragmentation());
+    Serial.print("getMaxFreeBlockSize: ");
+    Serial.println(ESP.getMaxFreeBlockSize());
 }
 
 void handleGetData() {
-    Serial.println(" - Handling request for data...");
+    Serial.println(" - Handling request for get_data...");
     String data = buildJSONData();
     server.send(200, "text/plain", data.c_str());
+}
+
+void handleDisplayData() {
+    Serial.println(" - Handling request for display_data...");
+    String data = CreateTempDisplayHTML();
+    server.send(200, "text/plain", data.c_str());
+}
+
+String CreateTempDisplayHTML()
+{
+    float outside_temp     = (temperature[OUTSIDE_S1] + temperature[OUTSIDE_S2]) / 2.0; 
+    float outside_humidity = (humidity[OUTSIDE_S1] + humidity[OUTSIDE_S2]) / 2.0;
+
+    String ptr = "";
+    ptr += "<!DOCTYPE html> <html>\n";
+    ptr += "<style>\n";
+    ptr += "table, th, td {font-size: 14px;border: 1px solid;border-collapse: collapse;padding: 5px;}\n";
+    ptr += "</style>\n";
+    ptr += "<body> <h1>Sierra Temps</h1>\n";
+    ptr += "<p style=\"font-size: 24px;\"> Outside Temperature: <strong>" + String(outside_temp, 1) + "degF</strong></p>\n";
+    ptr += "<p style=\"font-size: 24px;\"> Outside Humidity   : <strong>" + String(outside_humidity, 1) + "%</strong></p>\n";
+    ptr += "<p style=\"font-size: 16px;\"> Individual Sensor Data: </p>\n";
+    ptr += "<table><tbody><tr><td><strong>ID</strong></td><td><strong>Location</strong></td><td><strong>Temp (degF)</strong></td><td><strong>Humidity (%)</strong></td></tr>\n";
+    ptr += "<tr><td>T0</td><td>Outside</td><td>" + String(temperature[0], 2) + "degF</td><td>" + String(humidity[0], 2) + "%</td></tr>\n";
+    ptr += "<tr><td>T1</td><td>Outside</td><td>" + String(temperature[1], 2) + "degF</td><td>" + String(humidity[1], 2) + "%</td></tr>\n";
+    ptr += "<tr><td>T2</td><td>Inside Enclosure</td><td>" + String(temperature[0], 2) + "degF</td><td>" + String(humidity[2], 2) + "%</td></tr>\n";
+    ptr += "</tbody></table>\n";
+    ptr += "</body> </html>\n";
+
+    return ptr;
+}
+
+String CreateRootHTML()
+{
+    String ptr = "";
+    ptr += "<!DOCTYPE html> <html>\n";
+    ptr += "<style>\n";
+    ptr += "table, th, td {font-size: 14px;border: 1px solid;border-collapse: collapse;padding: 5px;}\n";
+    ptr += "</style>\n";
+    ptr += "<body> <h1>Welcome to Sierra Temp/Humidity widget</h1>\n";
+    ptr += "<p style=\"font-size: 20px;\">To get temp/humidity data as JSON: <strong>http://" + WiFi.localIP().toString()+":"+String(server_port) + "/get_data</strong></p>\n";
+    ptr += "<p style=\"font-size: 20px;\">To get temp/humidity data as HTML: <strong>http://" + WiFi.localIP().toString()+":"+String(server_port) + "/display_data</strong></p>\n";
+    ptr += "<p style=\"font-size: 16px;\"> ESP Debug Data: </p>\n";
+    ptr += "<table><tbody><tr><td><strong>Param</strong></td><td><strong>Value</strong></td></tr>\n";
+    ptr += "<tr><td>Port</td><td>" + String(server_port) + "</td></tr>\n";
+    ptr += "<tr><td>FreeHeap</td><td>" + String(ESP.getFreeHeap()) + "</td></tr>\n";
+    ptr += "<tr><td>HeapFragmentation</td><td>" + String(ESP.getHeapFragmentation()) + "</td></tr>\n";
+    ptr += "<tr><td>MaxFreeBlockSize</td><td>" + String(ESP.getMaxFreeBlockSize()) + "</td></tr>\n";
+    ptr += "</tbody></table>\n";
+    ptr += "</body> </html>\n";
+
+    return ptr;
 }
