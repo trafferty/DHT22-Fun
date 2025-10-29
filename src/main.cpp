@@ -98,9 +98,14 @@ void setup() {
         Serial.println(timeClient.getFormattedTime());
 
         // setup routes
-        server.on("/", handleRoot);
+        server.on("/", []() {
+            handleRoot();
+            server.send(200, "text/html", CreateRootHTML());
+        });
         server.on("/get_data", handleGetData);
-        server.on("/display_data", handleDisplayData);
+        server.on("/display_data", []() {
+            server.send(200, "text/html", CreateTempDisplayHTML());
+        });
 
         // Start server
         server.begin();
@@ -209,9 +214,6 @@ bool wifi_init(uint32_t waitTime_ms)
 
 void handleRoot() {
     Serial.println(" - Handling request for get_data...");
-    String data = CreateRootHTML();
-    server.send(200, "text/plain", data.c_str());
-
     Serial.print("getFreeHeap: ");
     Serial.println(ESP.getFreeHeap());
     Serial.print("getHeapFragmentation: ");
@@ -229,7 +231,7 @@ void handleGetData() {
 void handleDisplayData() {
     Serial.println(" - Handling request for display_data...");
     String data = CreateTempDisplayHTML();
-    server.send(200, "text/plain", data.c_str());
+    server.send(200, "text/plain", data);
 }
 
 String CreateTempDisplayHTML()
@@ -245,11 +247,12 @@ String CreateTempDisplayHTML()
     ptr += "<body> <h1>Sierra Temps</h1>\n";
     ptr += "<p style=\"font-size: 24px;\"> Outside Temperature: <strong>" + String(outside_temp, 1) + "degF</strong></p>\n";
     ptr += "<p style=\"font-size: 24px;\"> Outside Humidity   : <strong>" + String(outside_humidity, 1) + "%</strong></p>\n";
+    ptr += "<p style=\"font-size: 24px;\"> Timestamp          : <strong>" + timeClient.getFormattedTime() + "</strong></p>\n";
     ptr += "<p style=\"font-size: 16px;\"> Individual Sensor Data: </p>\n";
     ptr += "<table><tbody><tr><td><strong>ID</strong></td><td><strong>Location</strong></td><td><strong>Temp (degF)</strong></td><td><strong>Humidity (%)</strong></td></tr>\n";
-    ptr += "<tr><td>T0</td><td>Outside</td><td>" + String(temperature[0], 2) + "degF</td><td>" + String(humidity[0], 2) + "%</td></tr>\n";
-    ptr += "<tr><td>T1</td><td>Outside</td><td>" + String(temperature[1], 2) + "degF</td><td>" + String(humidity[1], 2) + "%</td></tr>\n";
-    ptr += "<tr><td>T2</td><td>Inside Enclosure</td><td>" + String(temperature[0], 2) + "degF</td><td>" + String(humidity[2], 2) + "%</td></tr>\n";
+    ptr += "<tr><td>T0</td><td>Outside</td><td>" + String(temperature[0], 2) + "</td><td>" + String(humidity[0], 2) + "%</td></tr>\n";
+    ptr += "<tr><td>T1</td><td>Outside</td><td>" + String(temperature[1], 2) + "</td><td>" + String(humidity[1], 2) + "%</td></tr>\n";
+    ptr += "<tr><td>T2</td><td>Inside Enclosure</td><td>" + String(temperature[2], 2) + "</td><td>" + String(humidity[2], 2) + "%</td></tr>\n";
     ptr += "</tbody></table>\n";
     ptr += "</body> </html>\n";
 
@@ -268,6 +271,7 @@ String CreateRootHTML()
     ptr += "<p style=\"font-size: 20px;\">To get temp/humidity data as HTML: <strong>http://" + WiFi.localIP().toString()+":"+String(server_port) + "/display_data</strong></p>\n";
     ptr += "<p style=\"font-size: 16px;\"> ESP Debug Data: </p>\n";
     ptr += "<table><tbody><tr><td><strong>Param</strong></td><td><strong>Value</strong></td></tr>\n";
+    ptr += "<tr><td>Timestamp</td><td>" + timeClient.getFormattedTime() + "</td></tr>\n";
     ptr += "<tr><td>Port</td><td>" + String(server_port) + "</td></tr>\n";
     ptr += "<tr><td>FreeHeap</td><td>" + String(ESP.getFreeHeap()) + "</td></tr>\n";
     ptr += "<tr><td>HeapFragmentation</td><td>" + String(ESP.getHeapFragmentation()) + "</td></tr>\n";
