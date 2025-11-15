@@ -11,11 +11,14 @@
 #include <NTPClient.h>
 #include <WiFiUdp.h>
 
+#include <deque>
+#include <algorithm> // Required for std::min
+
 #include "sierra_wifi_defs.h"
 
 #define version_str "v2.0: Deploy version"
 
-#define NUM_SENSORS 3
+const int8_t num_sensors = 3;
 
 #define DHTPIN1    4      // DHT sensor 1.  ESP12: D2
 #define DHTPIN2    5      // DHT sensor 2.  ESP12: D1
@@ -28,11 +31,19 @@ DHT_Unified dht[] = {
   {DHTPIN3, DHT22},
 };
 
-#define OUTSIDE_S1 0      // Index of outside sensor 1
-#define OUTSIDE_S2 1      // Index of outside sensor 2
+const int8_t outside_S1 = 0;      // Index of outside sensor 1
+const int8_t outside_S2 = 1;      // Index of outside sensor 2
 
-float humidity[NUM_SENSORS];
-float temperature[NUM_SENSORS];
+float humidity[num_sensors];
+float temperature[num_sensors];
+
+struct sensor_data_t {
+    float humidity[num_sensors];
+    float temperature[num_sensors];
+};
+
+std::deque<sensor_data_t> sensor_data;
+const int8_t num_data_pts = 20; 
 
 /*
 **  Network variables...
@@ -47,16 +58,20 @@ int server_port = 8088;
 String DNS_name = DHT22_TEMP_SERVER_HOSTNAME;
 
 bool online = false;
-const long interval = 5000; // 2 seconds
-unsigned long previousMillis = interval;
+const long interval_ms = 5000;     // 5 seconds
+const long ntp_interval_ms = 1000 * 3600; // 1 hour
+unsigned long previousMillis = interval_ms;
+unsigned long previousNTPMillis = ntp_interval_ms;
 
 // forward declarations
 bool wifi_init(uint32_t waitTime_ms);
 void updateSensorData();
-String buildJSONData();
+String buildJSONData(uint16_t num_pts);
 void handleRoot();
 void handleGetData();
+void handleGetDataFull();
 void handleDisplayData();
+String buildDateStr();
 String CreateTempDisplayHTML();
 String CreateRootHTML();
 
@@ -74,7 +89,7 @@ void setup() {
     Serial.print("\nDHT22 TempServer Version: ");
     Serial.println(version_str);
 
-    for (int i = 0; i < NUM_SENSORS; i++) 
+    for (int i = 0; i < num_sensors; i++) 
     {
         dht[i].begin();
         humidity[i] = 0;
@@ -103,6 +118,7 @@ void setup() {
             server.send(200, "text/html", CreateRootHTML());
         });
         server.on("/get_data", handleGetData);
+        server.on("/get_data_full", handleGetDataFull);
         server.on("/display_data", []() {
             server.send(200, "text/html", CreateTempDisplayHTML());
         });
@@ -117,13 +133,24 @@ void setup() {
 void loop() {
     unsigned long currentMillis = millis();
 
-    if (currentMillis - previousMillis >= interval) 
+    if (currentMillis - previousMillis >= interval_ms) 
     {
         previousMillis = currentMillis; 
 
         updateSensorData();
 
-        String data = buildJSONData();
+        sensor_data_t latest_data;
+        for (int i = 0; i < num_sensors; i++) 
+        {
+            latest_data.temperature[i] = temperature[i];
+            latest_data.humidity[i] = humidity[i];
+        }
+        sensor_data.push_front(latest_data);
+
+        if (sensor_data.size() > num_data_pts)
+            sensor_data.pop_back();
+
+        String data = buildJSONData(1);
         Serial.println(data);
     }
 
@@ -131,11 +158,17 @@ void loop() {
     {
         // Listen for HTTP requests from clients
         server.handleClient(); 
+
+        if (currentMillis - previousMillis >= ntp_interval_ms) 
+        {
+            timeClient.update();
+            previousNTPMillis = currentMillis;
+        }
     }
 }
 
 void updateSensorData() {
-    for (int i = 0; i < NUM_SENSORS; i++) 
+    for (int i = 0; i < num_sensors; i++) 
     {
         sensors_event_t event;
         dht[i].temperature().getEvent(&event);
@@ -152,28 +185,63 @@ void updateSensorData() {
     }
 }
 
+String buildTimeDateStr()
+{
+    time_t epochTime = timeClient.getEpochTime();
+    //Get a time structure
+    struct tm *ptm = gmtime ((time_t *)&epochTime); 
+    int currentMonth = ptm->tm_mon+1;
+    int currentDay = ptm->tm_mday;
+    int currentYear = ptm->tm_year+1900;
+    int currentHour =((epochTime  % 86400L) / 3600);
+    int currentMin  =((epochTime  % 3600) / 60);
+    int currentSec  = (epochTime  % 60);
+
+    String timeDateStr = String(currentMonth) + "/";
+    timeDateStr += String(currentDay) + "/";
+    timeDateStr += String(currentYear) + "-";
+    timeDateStr += String(currentHour) + ":";
+    timeDateStr += String(currentMin) + ":";
+    timeDateStr += String(currentSec);
+    return timeDateStr;
+}
+
 /*
-    Read humidity[NUM_SENSORS] and temperature[NUM_SENSORS] globals and put
+    Read humidity[num_sensors] and temperature[num_sensors] globals and put
     together JSON string like this:
 
-    "{'timestamp': '2025-08-26T18:10:55.379061', 'temp': [-2.06, 15.67, 31.81], 'humidity': [50.0, 49.1, 45.7]}"
-
+    "{'timestamp': '2025-08-26T18:10:55.379061', 
+      'values': [
+        {'temp': [-2.06, 15.67, 31.81], 'humidity': [50.0, 49.1, 45.7]},
+        {'temp': [-2.06, 15.67, 31.81], 'humidity': [50.0, 49.1, 45.7]},
+        {'temp': [-2.06, 15.67, 31.81], 'humidity': [50.0, 49.1, 45.7]}
+      ]}"
 */
-String buildJSONData() {
+String buildJSONData(uint16_t num_pts) {
     // Allocate a temporary JsonDocument
     JsonDocument doc;
 
-    doc["timestamp"] = timeClient.getFormattedTime();
+    doc["timestamp"] = buildTimeDateStr();
 
-    // Create the "temp" array
-    JsonArray tempVals = doc["temp"].to<JsonArray>();
-    // Create the "humidity" array
-    JsonArray humidityVals = doc["humidity"].to<JsonArray>();
+    JsonArray values = doc["values"].to<JsonArray>();
 
-    for (int i = 0; i < NUM_SENSORS; i++) 
+    uint16_t pts_to_get = std::min(num_pts, (uint16_t)sensor_data.size());
+
+    for (uint16_t ptIdx = 0; ptIdx < pts_to_get; ptIdx++)
     {
-        tempVals.add(float(temperature[i]));
-        humidityVals.add(float(humidity[i]));
+        JsonDocument val;
+
+        // Create the "temp" array
+        JsonArray tempVals = val["temp"].to<JsonArray>();
+        // Create the "humidity" array
+        JsonArray humidityVals = val["humidity"].to<JsonArray>();
+
+        for (int sensorIdx = 0; sensorIdx < num_sensors; sensorIdx++) 
+        {
+            tempVals.add(float(sensor_data[ptIdx].temperature[sensorIdx]));
+            humidityVals.add(float(sensor_data[ptIdx].humidity[sensorIdx]));
+        }
+        values.add(val);
     }
 
     String jsonStr;
@@ -224,7 +292,13 @@ void handleRoot() {
 
 void handleGetData() {
     Serial.println(" - Handling request for get_data...");
-    String data = buildJSONData();
+    String data = buildJSONData(1);
+    server.send(200, "text/plain", data.c_str());
+}
+
+void handleGetDataFull() {
+    Serial.println(" - Handling request for get_data...");
+    String data = buildJSONData(num_data_pts);
     server.send(200, "text/plain", data.c_str());
 }
 
@@ -236,8 +310,8 @@ void handleDisplayData() {
 
 String CreateTempDisplayHTML()
 {
-    float outside_temp     = (temperature[OUTSIDE_S1] + temperature[OUTSIDE_S2]) / 2.0; 
-    float outside_humidity = (humidity[OUTSIDE_S1] + humidity[OUTSIDE_S2]) / 2.0;
+    float outside_temp     = (temperature[outside_S1] + temperature[outside_S2]) / 2.0; 
+    float outside_humidity = (humidity[outside_S1] + humidity[outside_S2]) / 2.0;
 
     String ptr = "";
     ptr += "<!DOCTYPE html> <html>\n";
@@ -245,9 +319,9 @@ String CreateTempDisplayHTML()
     ptr += "table, th, td {font-size: 14px;border: 1px solid;border-collapse: collapse;padding: 5px;}\n";
     ptr += "</style>\n";
     ptr += "<body> <h1>Sierra Temps</h1>\n";
-    ptr += "<p style=\"font-size: 24px;\"> Outside Temperature: <strong>" + String(outside_temp, 1) + "degF</strong></p>\n";
+    ptr += "<p style=\"font-size: 24px;\"> Outside Temperature: <strong>" + String(outside_temp, 1) + " degF</strong></p>\n";
     ptr += "<p style=\"font-size: 24px;\"> Outside Humidity   : <strong>" + String(outside_humidity, 1) + "%</strong></p>\n";
-    ptr += "<p style=\"font-size: 24px;\"> Timestamp          : <strong>" + timeClient.getFormattedTime() + "</strong></p>\n";
+    ptr += "<p style=\"font-size: 24px;\"> Timestamp          : <strong>" + buildTimeDateStr() + "</strong></p>\n";
     ptr += "<p style=\"font-size: 16px;\"> Individual Sensor Data: </p>\n";
     ptr += "<table><tbody><tr><td><strong>ID</strong></td><td><strong>Location</strong></td><td><strong>Temp (degF)</strong></td><td><strong>Humidity (%)</strong></td></tr>\n";
     ptr += "<tr><td>T0</td><td>Outside</td><td>" + String(temperature[0], 2) + "</td><td>" + String(humidity[0], 2) + "%</td></tr>\n";
@@ -271,7 +345,7 @@ String CreateRootHTML()
     ptr += "<p style=\"font-size: 20px;\">To get temp/humidity data as HTML: <strong>http://" + WiFi.localIP().toString()+":"+String(server_port) + "/display_data</strong></p>\n";
     ptr += "<p style=\"font-size: 16px;\"> ESP Debug Data: </p>\n";
     ptr += "<table><tbody><tr><td><strong>Param</strong></td><td><strong>Value</strong></td></tr>\n";
-    ptr += "<tr><td>Timestamp</td><td>" + timeClient.getFormattedTime() + "</td></tr>\n";
+    ptr += "<tr><td>Timestamp</td><td>" + buildTimeDateStr() + "</td></tr>\n";
     ptr += "<tr><td>Port</td><td>" + String(server_port) + "</td></tr>\n";
     ptr += "<tr><td>FreeHeap</td><td>" + String(ESP.getFreeHeap()) + "</td></tr>\n";
     ptr += "<tr><td>HeapFragmentation</td><td>" + String(ESP.getHeapFragmentation()) + "</td></tr>\n";
