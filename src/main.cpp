@@ -38,6 +38,7 @@ float humidity[num_sensors];
 float temperature[num_sensors];
 
 struct sensor_data_t {
+    String timestamp;
     float humidity[num_sensors];
     float temperature[num_sensors];
 };
@@ -48,14 +49,14 @@ const int8_t num_data_pts = 20;
 /*
 **  Network variables...
 */
-IPAddress ip(IP1, IP2, IP3, DHT22_TEMP_SERVER_IP_LAST_FIELD);  // make sure IP is *outside* of DHCP pool range
+IPAddress ip(IP1, IP2, IP3, DHT22_MOBILE_TEMP_SERVER_IP_LAST_FIELD);  // make sure IP is *outside* of DHCP pool range
 IPAddress gateway(GW1, GW2, GW3, GW4);
 IPAddress subnet(SN1, SN2, SN3, SN4);
 IPAddress DNS(DNS1, DNS2, DNS3, DNS4);
 const char* ssid     = SSID;
 const char* password = WIFI_PW;
 int server_port = 8088;
-String DNS_name = DHT22_TEMP_SERVER_HOSTNAME;
+String DNS_name = DHT22_MOBILE_TEMP_SERVER_HOSTNAME;
 
 bool online = false;
 const long interval_ms = 5000;     // 5 seconds
@@ -71,7 +72,7 @@ void handleRoot();
 void handleGetData();
 void handleGetDataFull();
 void handleDisplayData();
-String buildDateStr();
+String buildTimeDateStr();
 String CreateTempDisplayHTML();
 String CreateRootHTML();
 
@@ -104,7 +105,7 @@ void setup() {
     else
     {
         timeClient.begin();
-        int GMTOffset = -5;
+        int GMTOffset = -6;  // -5 for Mar-Oct, -6 Nov-Mar
         timeClient.setTimeOffset(GMTOffset * 3600);
 
         Serial.println("Starting up time client");
@@ -144,6 +145,7 @@ void loop() {
         {
             latest_data.temperature[i] = temperature[i];
             latest_data.humidity[i] = humidity[i];
+            latest_data.timestamp = buildTimeDateStr();
         }
         sensor_data.push_front(latest_data);
 
@@ -197,9 +199,9 @@ String buildTimeDateStr()
     int currentMin  =((epochTime  % 3600) / 60);
     int currentSec  = (epochTime  % 60);
 
-    String timeDateStr = String(currentMonth) + "/";
-    timeDateStr += String(currentDay) + "/";
-    timeDateStr += String(currentYear) + "-";
+    String timeDateStr = String(currentYear) + "-";
+    timeDateStr += String(currentMonth) + "-";
+    timeDateStr += String(currentDay) + "T";
     timeDateStr += String(currentHour) + ":";
     timeDateStr += String(currentMin) + ":";
     timeDateStr += String(currentSec);
@@ -210,7 +212,7 @@ String buildTimeDateStr()
     Read humidity[num_sensors] and temperature[num_sensors] globals and put
     together JSON string like this:
 
-    "{'timestamp': '2025-08-26T18:10:55.379061', 
+    "{'timestamp': '2025-08-26T18:10:55', 
       'values': [
         {'temp': [-2.06, 15.67, 31.81], 'humidity': [50.0, 49.1, 45.7]},
         {'temp': [-2.06, 15.67, 31.81], 'humidity': [50.0, 49.1, 45.7]},
@@ -220,16 +222,18 @@ String buildTimeDateStr()
 String buildJSONData(uint16_t num_pts) {
     // Allocate a temporary JsonDocument
     JsonDocument doc;
+    JsonArray array = doc.to<JsonArray>();
 
-    doc["timestamp"] = buildTimeDateStr();
-
-    JsonArray values = doc["values"].to<JsonArray>();
+    
+    //JsonArray values = doc["values"].to<JsonArray>();
 
     uint16_t pts_to_get = std::min(num_pts, (uint16_t)sensor_data.size());
 
     for (uint16_t ptIdx = 0; ptIdx < pts_to_get; ptIdx++)
     {
         JsonDocument val;
+
+        val["timestamp"] = buildTimeDateStr();
 
         // Create the "temp" array
         JsonArray tempVals = val["temp"].to<JsonArray>();
@@ -241,7 +245,7 @@ String buildJSONData(uint16_t num_pts) {
             tempVals.add(float(sensor_data[ptIdx].temperature[sensorIdx]));
             humidityVals.add(float(sensor_data[ptIdx].humidity[sensorIdx]));
         }
-        values.add(val);
+        array.add(val);
     }
 
     String jsonStr;
