@@ -6,7 +6,8 @@
 #include <DHT_U.h>
 
 #include <ESP8266WiFi.h>
-#include <ESP8266WebServer.h>
+#include <ESPAsyncTCP.h>
+#include <ESPAsyncWebServer.h>
 
 #include <NTPClient.h>
 #include <WiFiUdp.h>
@@ -16,13 +17,37 @@
 
 #include "sierra_wifi_defs.h"
 
-#define version_str "v2.0: Deploy version"
+#define version_str "2025_11_23: v2.2: Changed to ESPAsyncWebServer."
+//#define MOBILE true
+
+#ifdef MOBILE
+    int IP_last_field = DHT22_MOBILE_TEMP_SERVER_IP_LAST_FIELD;
+    String dns_name   = DHT22_MOBILE_TEMP_SERVER_HOSTNAME;
+    #define DHTPIN1    4      // DHT sensor 1.  ESP12: D2
+    #define DHTPIN2    5      // DHT sensor 2.  ESP12: D1
+    #define DHTPIN3    14     // DHT sensor 3.  ESP12: D5
+#else
+    int IP_last_field = DHT22_PORCH_TEMP_SERVER_IP_LAST_FIELD;
+    String dns_name   = DHT22_PORCH_TEMP_SERVER_HOSTNAME;
+    #define DHTPIN1    4      // DHT sensor 1.  ESP12: D2
+    #define DHTPIN2    5      // DHT sensor 2.  ESP12: D1
+    #define DHTPIN3    14     // DHT sensor 3.  ESP12: D5
+#endif
+
+/*
+**  Network variables...
+*/
+IPAddress ip(IP1, IP2, IP3, IP_last_field);  // make sure IP is *outside* of DHCP pool range
+IPAddress gateway(GW1, GW2, GW3, GW4);
+IPAddress subnet(SN1, SN2, SN3, SN4);
+IPAddress DNS(DNS1, DNS2, DNS3, DNS4);
+const char* ssid     = SSID;
+const char* password = WIFI_PW;
+int server_port = 80;
+String DNS_name = dns_name;
 
 const int8_t num_sensors = 3;
 
-#define DHTPIN1    4      // DHT sensor 1.  ESP12: D2
-#define DHTPIN2    5      // DHT sensor 2.  ESP12: D1
-#define DHTPIN3    14     // DHT sensor 3.  ESP12: D5
 #define DHTTYPE    DHT22  // DHT 22 (AM2302)
 
 DHT_Unified dht[] = {
@@ -37,6 +62,16 @@ const int8_t outside_S2 = 1;      // Index of outside sensor 2
 float humidity[num_sensors];
 float temperature[num_sensors];
 
+bool online = false;
+const long interval_ms = 5000;
+const long record_interval_ms = 1000 * 60 * 5; // record every 5 min
+const long wifi_interval_ms = 5000;
+const long ntp_interval_ms = 1000 * 3600; // 1 hour
+unsigned long previousRecordedMillis = interval_ms;
+unsigned long previousMillis = interval_ms;
+unsigned long previousWiFiMillis = wifi_interval_ms;
+unsigned long previousNTPMillis = ntp_interval_ms;
+
 struct sensor_data_t {
     String timestamp;
     float humidity[num_sensors];
@@ -44,40 +79,22 @@ struct sensor_data_t {
 };
 
 std::deque<sensor_data_t> sensor_data;
-const int8_t num_data_pts = 20; 
-
-/*
-**  Network variables...
-*/
-IPAddress ip(IP1, IP2, IP3, DHT22_MOBILE_TEMP_SERVER_IP_LAST_FIELD);  // make sure IP is *outside* of DHCP pool range
-IPAddress gateway(GW1, GW2, GW3, GW4);
-IPAddress subnet(SN1, SN2, SN3, SN4);
-IPAddress DNS(DNS1, DNS2, DNS3, DNS4);
-const char* ssid     = SSID;
-const char* password = WIFI_PW;
-int server_port = 8088;
-String DNS_name = DHT22_MOBILE_TEMP_SERVER_HOSTNAME;
-
-bool online = false;
-const long interval_ms = 5000;     // 5 seconds
-const long ntp_interval_ms = 1000 * 3600; // 1 hour
-unsigned long previousMillis = interval_ms;
-unsigned long previousNTPMillis = ntp_interval_ms;
+const int16_t num_data_pts = (300); 
 
 // forward declarations
+void setupOnline();
 bool wifi_init(uint32_t waitTime_ms);
 void updateSensorData();
 String buildJSONData(uint16_t num_pts);
 void handleRoot();
-void handleGetData();
-void handleGetDataFull();
-void handleDisplayData();
+void purgeData();
+
 String buildTimeDateStr();
 String CreateTempDisplayHTML();
 String CreateRootHTML();
 
 // Create web server and set port number
-ESP8266WebServer server(server_port);
+AsyncWebServer server(server_port);
 
 WiFiUDP ntpUDP;
 // By default 'pool.ntp.org' is used with 60 seconds update interval
@@ -93,42 +110,17 @@ void setup() {
     for (int i = 0; i < num_sensors; i++) 
     {
         dht[i].begin();
-        humidity[i] = 0;
-        temperature[i] = 0;
+        humidity[i] = -99;
+        temperature[i] = -99;
     }
 
     online = wifi_init(5000);
     if (!online)
-    {
         Serial.println("Could not connect to WiFi.  Running in offline mode.");
-    }
     else
-    {
-        timeClient.begin();
-        int GMTOffset = -6;  // -5 for Mar-Oct, -6 Nov-Mar
-        timeClient.setTimeOffset(GMTOffset * 3600);
+        setupOnline();
 
-        Serial.println("Starting up time client");
-        delay(1000);
-        timeClient.update();
-        Serial.println(timeClient.getFormattedTime());
-
-        // setup routes
-        server.on("/", []() {
-            handleRoot();
-            server.send(200, "text/html", CreateRootHTML());
-        });
-        server.on("/get_data", handleGetData);
-        server.on("/get_data_full", handleGetDataFull);
-        server.on("/display_data", []() {
-            server.send(200, "text/html", CreateTempDisplayHTML());
-        });
-
-        // Start server
-        server.begin();
-        Serial.print("http server started at: ");
-        Serial.println(server.uri());
-    }
+    updateSensorData();
 }
 
 void loop() {
@@ -140,119 +132,54 @@ void loop() {
 
         updateSensorData();
 
-        sensor_data_t latest_data;
-        for (int i = 0; i < num_sensors; i++) 
+        if ((sensor_data.size() == 0) ||
+            (currentMillis - previousRecordedMillis >= record_interval_ms))
         {
-            latest_data.temperature[i] = temperature[i];
-            latest_data.humidity[i] = humidity[i];
-            latest_data.timestamp = buildTimeDateStr();
+            previousRecordedMillis = currentMillis;
+
+            sensor_data_t latest_data;
+            for (int i = 0; i < num_sensors; i++) 
+            {
+                latest_data.temperature[i] = temperature[i];
+                latest_data.humidity[i] = humidity[i];
+                latest_data.timestamp = buildTimeDateStr();
+            }
+            sensor_data.push_front(latest_data);
+
+            if (sensor_data.size() > num_data_pts)
+                sensor_data.pop_back();
         }
-        sensor_data.push_front(latest_data);
 
-        if (sensor_data.size() > num_data_pts)
-            sensor_data.pop_back();
-
-        String data = buildJSONData(1);
+        String data = (online?"online, pts=":"offline, pts=") + String(sensor_data.size()) + ": " + buildJSONData(1);
         Serial.println(data);
     }
 
     if (online)
     {
         // Listen for HTTP requests from clients
-        server.handleClient(); 
+        //server.handleClient(); 
 
-        if (currentMillis - previousMillis >= ntp_interval_ms) 
+        // update time with NTP
+        if (currentMillis - previousNTPMillis >= ntp_interval_ms) 
         {
-            timeClient.update();
             previousNTPMillis = currentMillis;
+            timeClient.update();
         }
     }
-}
-
-void updateSensorData() {
-    for (int i = 0; i < num_sensors; i++) 
+    else
     {
-        sensors_event_t event;
-        dht[i].temperature().getEvent(&event);
-        if (isnan(event.temperature))
-            temperature[i] = -99;
-        else
-            temperature[i] = event.temperature * 1.8 + 32;
-
-        dht[i].humidity().getEvent(&event);
-        if (isnan(event.relative_humidity))
-            humidity[i] = -99;
-        else
-            humidity[i] = event.relative_humidity;
-    }
-}
-
-String buildTimeDateStr()
-{
-    time_t epochTime = timeClient.getEpochTime();
-    //Get a time structure
-    struct tm *ptm = gmtime ((time_t *)&epochTime); 
-    int currentMonth = ptm->tm_mon+1;
-    int currentDay = ptm->tm_mday;
-    int currentYear = ptm->tm_year+1900;
-    int currentHour =((epochTime  % 86400L) / 3600);
-    int currentMin  =((epochTime  % 3600) / 60);
-    int currentSec  = (epochTime  % 60);
-
-    String timeDateStr = String(currentYear) + "-";
-    timeDateStr += String(currentMonth) + "-";
-    timeDateStr += String(currentDay) + "T";
-    timeDateStr += String(currentHour) + ":";
-    timeDateStr += String(currentMin) + ":";
-    timeDateStr += String(currentSec);
-    return timeDateStr;
-}
-
-/*
-    Read humidity[num_sensors] and temperature[num_sensors] globals and put
-    together JSON string like this:
-
-    "{'timestamp': '2025-08-26T18:10:55', 
-      'values': [
-        {'temp': [-2.06, 15.67, 31.81], 'humidity': [50.0, 49.1, 45.7]},
-        {'temp': [-2.06, 15.67, 31.81], 'humidity': [50.0, 49.1, 45.7]},
-        {'temp': [-2.06, 15.67, 31.81], 'humidity': [50.0, 49.1, 45.7]}
-      ]}"
-*/
-String buildJSONData(uint16_t num_pts) {
-    // Allocate a temporary JsonDocument
-    JsonDocument doc;
-    JsonArray array = doc.to<JsonArray>();
-
-    
-    //JsonArray values = doc["values"].to<JsonArray>();
-
-    uint16_t pts_to_get = std::min(num_pts, (uint16_t)sensor_data.size());
-
-    for (uint16_t ptIdx = 0; ptIdx < pts_to_get; ptIdx++)
-    {
-        JsonDocument val;
-
-        val["timestamp"] = buildTimeDateStr();
-
-        // Create the "temp" array
-        JsonArray tempVals = val["temp"].to<JsonArray>();
-        // Create the "humidity" array
-        JsonArray humidityVals = val["humidity"].to<JsonArray>();
-
-        for (int sensorIdx = 0; sensorIdx < num_sensors; sensorIdx++) 
+        if (currentMillis - previousWiFiMillis >= wifi_interval_ms) 
         {
-            tempVals.add(float(sensor_data[ptIdx].temperature[sensorIdx]));
-            humidityVals.add(float(sensor_data[ptIdx].humidity[sensorIdx]));
+            previousWiFiMillis = currentMillis;
+
+            Serial.println("Trying to connect to wifi again...");
+            online = wifi_init(5000);
+            if (!online)
+                Serial.println("Could not connect to WiFi.  Running in offline mode.");
+            else
+                setupOnline();
         }
-        array.add(val);
     }
-
-    String jsonStr;
-    serializeJson(doc, jsonStr);
-    //Serial.println(jsonStr);
-
-    return jsonStr;
 }
 
 bool wifi_init(uint32_t waitTime_ms)
@@ -284,6 +211,125 @@ bool wifi_init(uint32_t waitTime_ms)
     return true;
 }
 
+void setupOnline() {
+    Serial.println("Starting up time client");
+    timeClient.begin();
+    int GMTOffset = -6;  // -5 for Mar-Oct, -6 Nov-Mar
+    timeClient.setTimeOffset(GMTOffset * 3600);
+    delay(1000);
+    timeClient.update();
+    Serial.println(timeClient.getFormattedTime());
+
+    // setup routes
+    server.on("/", HTTP_GET, [](AsyncWebServerRequest *request){
+        handleRoot();
+        request->send(200, "text/html", CreateRootHTML());
+    });
+    server.on("/display_data", HTTP_GET, [](AsyncWebServerRequest *request){
+        Serial.println(" - Handling request for display_data...");
+        request->send(200, "text/html", CreateTempDisplayHTML());
+    });
+    server.on("/get_data", HTTP_GET, [](AsyncWebServerRequest *request){
+        request->send(200, "text/text", buildJSONData(1));
+    });
+    server.on("/get_data_all", HTTP_GET, [](AsyncWebServerRequest *request){
+        Serial.println(" - Handling request for get_data...");
+        request->send(200, "text/text", buildJSONData(num_data_pts));
+    });
+    server.on("/purge", HTTP_GET, [](AsyncWebServerRequest *request){
+        Serial.println(" - Clearing recorded data...");
+        sensor_data.clear();
+        request->send(200, "text/plain", "Sensor data purged");
+    });
+
+    // Start server
+    server.begin();
+}
+
+void updateSensorData() {
+    for (int i = 0; i < num_sensors; i++) 
+    {
+        sensors_event_t event;
+        dht[i].temperature().getEvent(&event);
+        if (isnan(event.temperature))
+            temperature[i] = -99;
+        else
+            temperature[i] = event.temperature * 1.8 + 32;
+
+        dht[i].humidity().getEvent(&event);
+        if (isnan(event.relative_humidity))
+            humidity[i] = -99;
+        else
+            humidity[i] = event.relative_humidity;
+    }
+}
+
+String buildTimeDateStr()
+{
+    time_t epochTime = timeClient.getEpochTime();
+    //Get a time structure
+    struct tm *ptm = gmtime ((time_t *)&epochTime); 
+    int currentMonth = ptm->tm_mon+1;
+    int currentDay = ptm->tm_mday;
+    int currentYear = ptm->tm_year+1900;
+    String timeDateStr = String(currentYear) + "-";
+    if (currentMonth < 10)
+        timeDateStr += "0" + String(currentMonth) + "-";
+    else
+        timeDateStr += String(currentMonth) + "-";
+    if (currentDay < 10)
+        timeDateStr += "0" + String(currentDay) + "T";
+    else
+        timeDateStr += String(currentDay) + "T";
+    timeDateStr += timeClient.getFormattedTime();
+
+    return timeDateStr;
+}
+
+/*
+    Read humidity[num_sensors] and temperature[num_sensors] globals and put
+    together JSON string like this:
+
+    [{"timestamp":"2025-11-15T17:18:25","temp":[77.18,77,77.18],"humidity":[58.4,59.7,58.6]},
+     {"timestamp":"2025-11-15T17:18:25","temp":[77,77,77.18],"humidity":[58.4,59.8,58.6]},
+    ...
+*/
+String buildJSONData(uint16_t num_pts) {
+    // Allocate a temporary JsonDocument
+    JsonDocument doc;
+    JsonArray array = doc.to<JsonArray>();
+
+    
+    //JsonArray values = doc["values"].to<JsonArray>();
+
+    uint16_t pts_to_get = std::min(num_pts, (uint16_t)sensor_data.size());
+
+    for (uint16_t ptIdx = 0; ptIdx < pts_to_get; ptIdx++)
+    {
+        JsonDocument val;
+
+        val["timestamp"] = sensor_data[ptIdx].timestamp;
+
+        // Create the "temp" array
+        JsonArray tempVals = val["temp"].to<JsonArray>();
+        // Create the "humidity" array
+        JsonArray humidityVals = val["humidity"].to<JsonArray>();
+
+        for (int sensorIdx = 0; sensorIdx < num_sensors; sensorIdx++) 
+        {
+            tempVals.add(float(sensor_data[ptIdx].temperature[sensorIdx]));
+            humidityVals.add(float(sensor_data[ptIdx].humidity[sensorIdx]));
+        }
+        array.add(val);
+    }
+
+    String jsonStr;
+    serializeJson(doc, jsonStr);
+    //Serial.println(jsonStr);
+
+    return jsonStr;
+}
+
 void handleRoot() {
     Serial.println(" - Handling request for get_data...");
     Serial.print("getFreeHeap: ");
@@ -292,24 +338,6 @@ void handleRoot() {
     Serial.println(ESP.getHeapFragmentation());
     Serial.print("getMaxFreeBlockSize: ");
     Serial.println(ESP.getMaxFreeBlockSize());
-}
-
-void handleGetData() {
-    Serial.println(" - Handling request for get_data...");
-    String data = buildJSONData(1);
-    server.send(200, "text/plain", data.c_str());
-}
-
-void handleGetDataFull() {
-    Serial.println(" - Handling request for get_data...");
-    String data = buildJSONData(num_data_pts);
-    server.send(200, "text/plain", data.c_str());
-}
-
-void handleDisplayData() {
-    Serial.println(" - Handling request for display_data...");
-    String data = CreateTempDisplayHTML();
-    server.send(200, "text/plain", data);
 }
 
 String CreateTempDisplayHTML()
@@ -339,21 +367,32 @@ String CreateTempDisplayHTML()
 
 String CreateRootHTML()
 {
+    String get_data_URL     = "http://" + WiFi.localIP().toString()+":"+String(server_port) + "/get_data";
+    String get_data_all_URL = "http://" + WiFi.localIP().toString()+":"+String(server_port) + "/get_data_all";
+    String display_data_URL = "http://" + WiFi.localIP().toString()+":"+String(server_port) + "/display_data";
+    String purge_data_URL   = "http://" + WiFi.localIP().toString()+":"+String(server_port) + "/purge";
+
     String ptr = "";
     ptr += "<!DOCTYPE html> <html>\n";
     ptr += "<style>\n";
     ptr += "table, th, td {font-size: 14px;border: 1px solid;border-collapse: collapse;padding: 5px;}\n";
     ptr += "</style>\n";
     ptr += "<body> <h1>Welcome to Sierra Temp/Humidity widget</h1>\n";
-    ptr += "<p style=\"font-size: 20px;\">To get temp/humidity data as JSON: <strong>http://" + WiFi.localIP().toString()+":"+String(server_port) + "/get_data</strong></p>\n";
-    ptr += "<p style=\"font-size: 20px;\">To get temp/humidity data as HTML: <strong>http://" + WiFi.localIP().toString()+":"+String(server_port) + "/display_data</strong></p>\n";
+    ptr += "<p style=\"font-size: 20px;\">To display latest temp/humidity data in browser: <a href="+display_data_URL+">"+display_data_URL+"</a></p>\n";
+    ptr += "<p style=\"font-size: 20px;\">To get latest temp/humidity data as JSON       : <a href="+get_data_URL+">"+get_data_URL+"</a></p>\n";
+    ptr += "<p style=\"font-size: 20px;\">To get ALL temp/humidity data as JSON          : <a href="+get_data_all_URL+">"+get_data_all_URL+"</a></p>\n";
+    ptr += "<p style=\"font-size: 20px;\">To purge all data                              : <a href="+purge_data_URL+">"+purge_data_URL+"</a></p>\n";
     ptr += "<p style=\"font-size: 16px;\"> ESP Debug Data: </p>\n";
+    ptr += "<p style=\"font-size: 16px;\"> Version str: " + String(version_str) + "</p>\n";
     ptr += "<table><tbody><tr><td><strong>Param</strong></td><td><strong>Value</strong></td></tr>\n";
     ptr += "<tr><td>Timestamp</td><td>" + buildTimeDateStr() + "</td></tr>\n";
     ptr += "<tr><td>Port</td><td>" + String(server_port) + "</td></tr>\n";
     ptr += "<tr><td>FreeHeap</td><td>" + String(ESP.getFreeHeap()) + "</td></tr>\n";
-    ptr += "<tr><td>HeapFragmentation</td><td>" + String(ESP.getHeapFragmentation()) + "</td></tr>\n";
     ptr += "<tr><td>MaxFreeBlockSize</td><td>" + String(ESP.getMaxFreeBlockSize()) + "</td></tr>\n";
+    ptr += "<tr><td>HeapFragmentation</td><td>" + String(ESP.getHeapFragmentation()) + "</td></tr>\n";
+    ptr += "<tr><td>Recorded data pts</td><td>" + String(sensor_data.size()) + "</td></tr>\n";
+    ptr += "<tr><td>Max data pts</td><td>" + String(num_data_pts) + "</td></tr>\n";
+    ptr += "<tr><td>Record interval (ms)</td><td>" + String(record_interval_ms) + "</td></tr>\n";
     ptr += "</tbody></table>\n";
     ptr += "</body> </html>\n";
 
